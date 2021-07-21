@@ -1,0 +1,13 @@
+// Set for your network
+//
+#define WIFI_SID "TAFwlani"
+#define WIFI_PWD "TalOrg778318"
+
+// IP of ATEM Mini
+//
+#define ATEM_IP   "192.168.1.99"
+
+// Set ID for this input
+//
+#define MY_INPUT (1)
+
