@@ -52,21 +52,23 @@ int connectATEM(String atemip)
 int wifiSetup()
 {
   int c=0;
-  
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA);
     
+  WiFi.mode(WIFI_STA);   
   WiFi.begin(WIFI_SID, WIFI_PWD);
 
-  WiFi.hostname("esp8266tally");
+  // WiFi.hostname("esp8266tally");
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    Serial.printf(" %d ", WiFi.status());
     c++;
     if (c>30)
       return -1;
   }
+
+  Serial.println(WiFi.localIP().toString());
+  WiFi.setAutoReconnect(true);
 
   return 0;
 }
@@ -87,25 +89,33 @@ void setRouting(int dest, int src)
 void httpIndex() {
   String s = "<html><h1>Tally</h1>";
 
+  s+="<div>Input: <b>"+String(myID)+"</b></div>";
+
+  s+="<form action=\"/setid\" method=\"post\">";
+  s+="<div>ID: <input type=\"text\" name=\"i\" value=\""+String(myID)+"\"></div>";  
+  s+="<div><input type=\"submit\" value=\"Change\"></div>";
+  s+="</form>";
+
   if (!client.connected()) {
     s+="<div>Not connected!</div>";
   } else {
     s+="<div>Connected to: "+atemIP+"</div>";
   }
 
-  s+="<div><ol>";
+  s+="<table><tr><th>Output</th><th>Input</th></tr>";
 
   for(int i=0;i<outputs;i++) {
-    s+="<li>";
-    s+=String(output[i]);
-    s+="</li>";
+    s+="<tr>";
+    s+="<td>"+String(i)+"</td>";
+    s+="<td>"+String(output[i])+"</td>";
+    s+="</tr>";
   }
   
-  s+"</ol></div><div>";
+  s+"</table><div>";
 
-  s+="<form action=\"/route\" method=\"get\">";
+  s+="<form action=\"/route\" method=\"post\">";
   s+="<div>DST: <input type=\"text\" name=\"d\" value=\"1\"></div>";
-  s+="<div>SRC: <input type=\"text\" name=\"s\" value=\"3\"></div>";
+  s+="<div>SRC: <input type=\"text\" name=\"s\" value=\""+String(output[2])+"\"></div>";
   s+="<div><input type=\"submit\" value=\"Set\"></div>";
   s+="</form>";
   
@@ -119,6 +129,26 @@ void httpGetSetInput() {
     myID=input.toInt();
   }
   server.send(200, "text/plain", "My input is: " + String(myID));
+}
+
+void httpSetMyInput() {
+  int i;
+  String ti=server.arg("i");
+
+  if (ti.length()==0) {
+    server.send(500, "text/plain", "Invalid request");
+    return;
+  }
+
+  i=ti.toInt();
+  // xxx
+  if (i<0 || i>16) {
+    server.send(404, "text/plain", "Invalid input");     
+    return;
+  }
+
+  myID=i;
+  server.send(200, "text/plain", "My input is now "+String(myID));
 }
 
 void httpSetRoute() {
@@ -137,6 +167,7 @@ void httpSetRoute() {
   // XXX
   if (src<0 || src>16 || dst<0 || dst>3) {
     server.send(404, "text/plain", "Invalid source or destination");
+    return;
   }
 
   setRouting(dst, src);
@@ -153,37 +184,40 @@ void setup() {
     Serial.println("WiFi: Failed");
     delay(2000);
   }
-  
-  Serial.println(WiFi.localIP().toString());
+    
   buf[0]=0;
   
   server.on("/", httpIndex);
   server.on("/input", httpGetSetInput);
   server.on("/route", httpSetRoute);
+  server.on("/setid", httpSetMyInput);
 
-  Serial.println("WiFi: Failed"); 
-  int n = MDNS.queryService("blackmagic", "tcp");
-  if (n == 0) {
-    Serial.println("Not found, using default ATEM IP");
-  } else {
-    Serial.println("ATEM service found");    
-    Serial.print("IP: ");
-    Serial.println(MDNS.IP(0));
+  if (MDNS.begin("atemtally")) {
+    Serial.println("MDNS responder started");
+
+    //
+    MDNS.addService("http", "tcp", 80);
+
+    Serial.println("Querying network for ATEM");
+    int n = MDNS.queryService("blackmagic", "tcp");
+    if (n == 0) {
+      Serial.println("Nothing found, using default ATEM IP");
+    } else {
+      Serial.println("ATEM found");    
+      Serial.print("IP: ");
+      Serial.println(MDNS.IP(0));
     
-    atemIP=String(MDNS.IP(0).toString());
+      atemIP=String(MDNS.IP(0).toString());
+    }
   }
 
   server.begin();
-
-  if (MDNS.begin("esp8266tally")) {
-    Serial.println("MDNS responder started");
-  }
 
   Serial.println("Ready");
   
   delay(2000);
 
-  // And ESP-01 LED is shared with serial so no output after this on it
+  // On a ESP-01 LED is shared with serial GPIO so no output after this on it!
   pinMode(LED_BUILTIN, OUTPUT);
 }
 
@@ -205,20 +239,26 @@ void check()
     int d=atoi(s1);
     int s=atoi(s2);
 
-    output[d]=s;    
+    output[d]=s;
+
+    Serial.print(d);
+    Serial.print("=");
+    Serial.println(s);
     
     break;
   }
 }
 
+// Keep alive ping
+//
 void ping()
 {
-  // Stupid keep alive ping
-  pinger++;
-  if (pinger>60000) {
-    pinger=0;
-    client.print("\n");
-    Serial.println("PING");
+  static unsigned long pm=0;
+  unsigned long cm = millis();
+  
+  if (cm-pm >= 2000) {
+    pm=cm;
+    client.print("\n");    
   }
 }
 
@@ -248,6 +288,15 @@ void setLedState()
   // On if program
   // Off otherwise
   //
+
+  if (!client.connected()) {
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(300);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    return;
+  }
+  
   if (output[2]==myID && output[1]!=myID) {
     unsigned long cm = millis();
     if (cm-pm >= 100) {
@@ -255,7 +304,7 @@ void setLedState()
       ppls=(ppls==LOW) ? HIGH : LOW;
     }
     digitalWrite(LED_BUILTIN, ppls);
-  } else if (output[1]==myID) {
+  } else if (output[1]==myID || output[0]==myID) {
     digitalWrite(LED_BUILTIN, LOW);
   } else {
     digitalWrite(LED_BUILTIN, HIGH);
@@ -264,8 +313,10 @@ void setLedState()
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Lost WiFi, reconnecting...");
-    wifiSetup();
+    Serial.printf(" %d ", WiFi.status());
+    Serial.println("Lost WiFi, waiting for auto reconnecting...");
+    delay(500);
+    return;
   }
   
   if (!client.connected()) {
@@ -273,13 +324,15 @@ void loop() {
     connectATEM(atemIP);
   }
 
-  readClient();
+  if (client.connected()) {
+    readClient();
+  }
+  
   setLedState();
   
   server.handleClient();
   
   MDNS.update();
   
-  ping();
-  
+  ping();  
 }
