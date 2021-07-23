@@ -1,7 +1,14 @@
+#ifdef ESP32
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <WiFiClient.h>
+#include <WebServer.h>
+#else
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
+#endif
 
 // Very simple ESP-01 ESP8266 ATEM Mini Tally
 
@@ -24,7 +31,14 @@ int pinger=0;
 
 WiFiClient client;
 
+#ifdef ESP32
+WebServer server(80);
+
+#define LED_BUILTIN (2)
+
+#else
 ESP8266WebServer server(80);
+#endif
 
 char buf[100];
 int i=0;
@@ -39,7 +53,7 @@ String atemIP=ATEM_IP;
 int connectATEM(String atemip)
 {
   Serial.println("Connecting to ATEM");
-  if (client.connect(atemip, 9990)) {
+  if (client.connect(atemip.c_str(), 9990)) {
     Serial.println("connected");
     return 0;
   } else {
@@ -331,8 +345,9 @@ void loop() {
   setLedState();
   
   server.handleClient();
-  
+#ifndef ESP32  
   MDNS.update();
+#endif
   
   ping();  
 }
