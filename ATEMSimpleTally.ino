@@ -38,6 +38,9 @@ WebServer server(80);
 
 #else
 ESP8266WebServer server(80);
+
+// For ESP-01 LED
+#define INVERTED_LED 1
 #endif
 
 char buf[100];
@@ -189,6 +192,42 @@ void httpSetRoute() {
   server.send(200, "text/plain", "Routed "+String(src)+ " to "+String(dst));
 }
 
+void httpSearchATEM() {
+  searchATEM(false);
+}
+
+int searchATEM(bool setip) {
+  Serial.println("Querying network for ATEM");
+  
+  int n = MDNS.queryService("blackmagic", "tcp");
+  if (n == 0) {
+    Serial.println("Nothing found, using default ATEM IP");
+    return -1;
+  }
+  Serial.println("ATEM found");    
+  Serial.println(n);
+
+  for (int i = 0; i < n; ++i) {
+    // Print details for each service found
+    Serial.print("  ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.print(MDNS.hostname(i));
+    Serial.print(" (");
+    Serial.print(MDNS.IP(i));
+    Serial.print(":");
+    Serial.print(MDNS.port(i));
+    Serial.println(")");
+  }
+  
+  Serial.print("IP: ");
+  Serial.println(MDNS.IP(0));
+    
+  atemIP=String(MDNS.IP(0).toString());
+
+  return n;
+}
+
 void setup() {
   delay(1000);
   
@@ -205,6 +244,7 @@ void setup() {
   server.on("/input", httpGetSetInput);
   server.on("/route", httpSetRoute);
   server.on("/setid", httpSetMyInput);
+  server.on("/search", httpSearchATEM);
 
   if (MDNS.begin("atemtally")) {
     Serial.println("MDNS responder started");
@@ -212,17 +252,10 @@ void setup() {
     //
     MDNS.addService("http", "tcp", 80);
 
-    Serial.println("Querying network for ATEM");
-    int n = MDNS.queryService("blackmagic", "tcp");
-    if (n == 0) {
-      Serial.println("Nothing found, using default ATEM IP");
-    } else {
-      Serial.println("ATEM found");    
-      Serial.print("IP: ");
-      Serial.println(MDNS.IP(0));
-    
-      atemIP=String(MDNS.IP(0).toString());
-    }
+    // XXX: Problems with this, disabled for now
+    // ESP32: IP 0.0.0.0
+    // ESP8622: Nothing found
+    // searchATEM(true);
   }
 
   server.begin();
@@ -296,7 +329,17 @@ void readClient()
 unsigned long pm=0;
 int ppls=HIGH;
 
-void setLedState()
+// Helper to handle different type on led connections,
+// ESP-01 has internal led ON when LOW and not HIGH so deal with it
+void setLedState(int level) {
+#ifdef INVERTED_LED
+  digitalWrite(LED_BUILTIN, level==HIGH ? LOW : HIGH);
+#else
+  digitalWrite(LED_BUILTIN, level);
+#endif
+}
+
+void setTallyLedState()
 {
   // Blink if preview
   // On if program
@@ -304,9 +347,9 @@ void setLedState()
   //
 
   if (!client.connected()) {
-    digitalWrite(LED_BUILTIN, LOW);
+    setLedState(HIGH);
     delay(300);
-    digitalWrite(LED_BUILTIN, HIGH);
+    setLedState(LOW);
     delay(100);
     return;
   }
@@ -317,11 +360,11 @@ void setLedState()
       pm=cm;
       ppls=(ppls==LOW) ? HIGH : LOW;
     }
-    digitalWrite(LED_BUILTIN, ppls);
+    setLedState(ppls);
   } else if (output[1]==myID || output[0]==myID) {
-    digitalWrite(LED_BUILTIN, LOW);
+    setLedState(HIGH);
   } else {
-    digitalWrite(LED_BUILTIN, HIGH);
+    setLedState(LOW);
   }
 }
 
@@ -342,7 +385,7 @@ void loop() {
     readClient();
   }
   
-  setLedState();
+  setTallyLedState();
   
   server.handleClient();
 #ifndef ESP32  
